@@ -1,0 +1,17 @@
+{
+  "name": "events_node",
+  "version": "1.0.0",
+  "description": "load data from access db and push to agol",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "josh brown",
+  "license": "ISC",
+  "dependencies": {
+    "adodb": "0.0.16",
+    "https": "^1.0.0",
+    "node-adodb": "^4.2.2",
+    "request": "^2.87.0"
+  }
+}
