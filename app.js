@@ -3,58 +3,80 @@ var ADODB = require('node-adodb');
 var request = require('request');
 var http = require("https");
 ADODB.debug=true;
+var client_id;
+var client_secret;
+var tokenReceived = '';
+var featureServiceURL;
 
-//Connection strings & Open the database.
+//*****************************************
+//             SETTINGS
+//*****************************************
 
 //Update location to where the db is stored. MUST USE DOUBLE FORWARD SLASHES!!
 var sourceDataFile = "C:\\inetpub\\wwwroot\\Events_Node\\EventsDB_.mdb";
-var connection = ADODB.open('Provider=Microsoft.Jet.OLEDB.4.0;Data Source=' + sourceDataFile)
+//ACCESS DB Query String
+var queryAllEvents = 'SELECT * FROM [Events];'
+var queryCurrentEvents = 'SELECT * FROM [Events] WHERE [Events].[StartDate] < date() AND [Events].[EndDate] > date();'
 
+//Get these from the AGO application. Required to generate the access token, which is required to make changes to the dataset.
+client_id = 'tAppQC2oNTgIOElj';
+client_secret = 'e722b7311d4f45e6acf6234f65c38fc5';
+
+//Update the AGO Feature Service you want the data copied to. 
+//You need to have the /0/applyEdits at the end of the string.
+featureServiceURL = 'https://services.arcgis.com/PMTtzuTB6WiPuNSv/arcgis/rest/services/eventsmap/FeatureServer/0/applyEdits'
+
+//*****************************************
+//          DATABASE CONNECTION
+//*****************************************
+
+var connection = ADODB.open('Provider=Microsoft.Jet.OLEDB.4.0;Data Source=' + sourceDataFile)
 //Holding container for the data pulled from Access
 var dataContainer = {}; 
+//Container for the parameters that will be passed into the EventsMap update.
 var options = {};
 
 //UPDATE ACCESS DB QUERY HERE. 
-connection.query("SELECT * FROM [Events];") 
+connection.query(queryCurrentEvents)
     .then(data => {
-
+        console.log("Query database..");
+        console.log("Formatting data..");
+        console.log("Uploading to ArcGIS Online..");
         //copy results from query into dataContainer bin outside this Promise scope.
-        dataContainer = data;  
-
+        dataContainer = data;
         //method that transforms the dataContainer object into what ArcGIS needs.
-        format(dataContainer); 
-
+        format(dataContainer);
+     })
+    .then(function() {
         //options is the json object that will be sent to AGOL.
         options = { 
             method: 'POST',
-
             //Update to match the appropriate feature service!
-            url: 'https://services.arcgis.com/PMTtzuTB6WiPuNSv/arcgis/rest/services/eventsmap/FeatureServer/0/applyEdits', 
+            url: featureServiceURL,
             headers: 
-            { 'Postman-Token': '0b6eed18-16a0-40ec-8615-079bcc1898f0',
-                'Cache-Control': 'no-cache',
-                'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW' },
-            formData: 
+            {'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW'},
+            formData:
             { f: 'json',
-              token: 'aPsWX1bR3JA3lB4S1LYYrplHUafsP6C-Qgbd6KUWSorut-bxeED3XU1IN_coJv3E69FxkPdx4oIGDY25H-jpOYyJepkBMWc6SRhGZbVYK6j_zEtpMgszcwsy31iq5Ce_RAGN0VdmxATuZ0ex9YWrPw', //add authentication here
-              
-              //must be converted to a string prior to sending to AGOL.
+              token: tokenReceived,              
+              //options object are added under 'adds' and must be converted to a string prior to sending to AGOL.
               adds: JSON.stringify(dataContainer) 
             } 
         };
     })
     .then(function() {
-
-        //send the data to AGOL. Handle response.
+        authenticate(client_id, client_secret);
+    })
+    .then(setTimeout(function() {
+        options.formData.token = tokenReceived;
         request(options, function (error, response, body) { 
-            if (error) throw new Error(error);          
+            if (error) throw new Error(error);
             console.log("Completed successfully: ", body);
         })
-    })
+    }, 1000))
+    .catch(error => console.log("error: ", error));
 
 //Method used to transform data object to feature layer.
 function format(obj) {
-
 
     //These will all need to be updated to match the data schema (fields) being pulled from the AccessDB table.
     for (i in obj) {
@@ -82,4 +104,23 @@ function format(obj) {
         delete dataContainer[i].Lat_y;
         delete dataContainer[i].Lon_x;
     }
+}
+
+function authenticate(clientId, clientSecret) {
+    var credentials = {
+        'client_id': clientId,
+        'client_secret': clientSecret,
+        'grant_type': 'client_credentials',
+        'expiration': '2880'
+    }
+    
+    return request.post({
+        url: 'https://www.arcgis.com/sharing/rest/oauth2/token/', //This is where you ask for a token on AGOL, not the feature service url.
+        json: true,
+        form: credentials,
+    }, function(error, response, body) {
+        options.formData.token = body.access_token;
+        tokenReceived = body.access_token;
+        if (error) new Error(error);
+    })    
 }
