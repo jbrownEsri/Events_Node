@@ -66,13 +66,6 @@ connection.query(queryCurrentEvents)
     .then(function() {
         authenticate(client_id, client_secret);
     })
-    .then(setTimeout(function() {
-        options.formData.token = tokenReceived;
-        request(options, function (error, response, body) { 
-            if (error) throw new Error(error);
-            console.log("Completed successfully: ", body);
-        })
-    }, 1000))
     .catch(error => console.log("error: ", error));
 
 //Method used to transform data object to feature layer.
@@ -122,5 +115,13 @@ function authenticate(clientId, clientSecret) {
         options.formData.token = body.access_token;
         tokenReceived = body.access_token;
         if (error) new Error(error);
+        updateAGOL();
     })    
+}
+
+function updateAGOL() {
+    request(options, function (error, response, body) { 
+        if (error) throw new Error(error);
+        console.log("Completed successfully: ", body);
+    })
 }
