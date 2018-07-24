@@ -7,6 +7,14 @@ var client_id;
 var client_secret;
 var tokenReceived = '';
 var featureServiceURL;
+var geocodeBody = {};
+//Holding container for the data pulled from Access
+var masterDataContainer = {};
+
+//addresses object to be used to pass into the world geocoding service.
+var addresses = {
+    records: []
+};
 
 //*****************************************
 //             SETTINGS
@@ -31,41 +39,46 @@ featureServiceURL = 'https://services.arcgis.com/PMTtzuTB6WiPuNSv/arcgis/rest/se
 //*****************************************
 
 var connection = ADODB.open('Provider=Microsoft.Jet.OLEDB.4.0;Data Source=' + sourceDataFile)
-//Holding container for the data pulled from Access
-var dataContainer = {}; 
+
+
 //Container for the parameters that will be passed into the EventsMap update.
-var options = {};
+//options is the json object that will be sent to AGOL.
+var options = { 
+    method: 'POST',
+    //Update to match the appropriate feature service!
+    url: featureServiceURL,
+    headers: 
+    {'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW'},
+    formData:
+    { f: 'json',
+      token: tokenReceived,              
+      //options object are added under 'adds' and must be converted to a string prior to sending to AGOL.
+      adds: JSON.stringify(masterDataContainer) 
+    } 
+};
 
 //UPDATE ACCESS DB QUERY HERE. 
-connection.query(queryCurrentEvents)
+connection.query(queryAllEvents)
     .then(data => {
         console.log("Query database..");
         console.log("Formatting data..");
         console.log("Uploading to ArcGIS Online..");
-        //copy results from query into dataContainer bin outside this Promise scope.
-        dataContainer = data;
-        //method that transforms the dataContainer object into what ArcGIS needs.
-        format(dataContainer);
-     })
+        //copy results from query into masterDataContainer bin outside this Promise scope.
+        masterDataContainer = data;
+        //method that transforms the masterDataContainer object into what ArcGIS needs.
+    })
     .then(function() {
-        //options is the json object that will be sent to AGOL.
-        options = { 
-            method: 'POST',
-            //Update to match the appropriate feature service!
-            url: featureServiceURL,
-            headers: 
-            {'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW'},
-            formData:
-            { f: 'json',
-              token: tokenReceived,              
-              //options object are added under 'adds' and must be converted to a string prior to sending to AGOL.
-              adds: JSON.stringify(dataContainer) 
-            } 
-        };
+        format(masterDataContainer);
     })
     .then(function() {
         authenticate(client_id, client_secret);
     })
+    .then(function() {
+        console.log(".then following authentication. has geocode(addresses) already run?");
+    })
+    // .then(function() {
+        
+    // })
     .catch(error => console.log("error: ", error));
 
 //Method used to transform data object to feature layer.
@@ -75,27 +88,40 @@ function format(obj) {
     for (i in obj) {
 
         //Populate the spatial data. A third function may be required to geocode addresses if there is no point data already available.
-        dataContainer[i].geometry = {
+        masterDataContainer[i].geometry = {
             "x": obj[i].Lon_x,
             "y": obj[i].Lat_y
         },
-        dataContainer[i].attributes = {
-            "ID": obj[i].ID,
+        masterDataContainer[i].attributes = {
+            "OBJECTID": obj[i].ID,
             "Description": obj[i].Description,
             "StartDate": obj[i].StartDate,
             "EndDate": obj[i].EndDate,
-
+            
             //Note: Lat/Long notation is backwards from (x,y) cartesian coordinates. That's why you see Latitude = the Y coordinate and Longitude = the X coordinate.
             "Lat_y": obj[i].Lat_y,
-            "Lon_x": obj[i].Lon_x
+            "Lon_x": obj[i].Lon_x,
+            "SingleLine": obj[i].Address
         }
+
+        //pull address data from masterDataContainer and format so it agrees with single line format for arcgis geocoder.
+        var geocodingData = {
+            "attributes": {
+                "OBJECTID": obj[i].ID,
+                "SingleLine": obj[i].Address
+            }
+        };
+        //pushes the current state of geocodingData for each iteration into the records array of addresses.
+        addresses.records.push(geocodingData);
+
         //The old properties must be deleted so the object matches the feature service.        
-        delete dataContainer[i].ID;
-        delete dataContainer[i].Description;
-        delete dataContainer[i].StartDate;
-        delete dataContainer[i].EndDate;
-        delete dataContainer[i].Lat_y;
-        delete dataContainer[i].Lon_x;
+        delete masterDataContainer[i].ID;
+        delete masterDataContainer[i].Description;
+        delete masterDataContainer[i].StartDate;
+        delete masterDataContainer[i].EndDate;
+        delete masterDataContainer[i].Lat_y;
+        delete masterDataContainer[i].Lon_x;
+        delete masterDataContainer[i].Address;
     }
 }
 
@@ -107,16 +133,53 @@ function authenticate(clientId, clientSecret) {
         'expiration': '2880'
     }
     
-    return request.post({
+    request.post({
         url: 'https://www.arcgis.com/sharing/rest/oauth2/token/', //This is where you ask for a token on AGOL, not the feature service url.
         json: true,
         form: credentials,
     }, function(error, response, body) {
-        options.formData.token = body.access_token;
-        tokenReceived = body.access_token;
-        if (error) new Error(error);
-        updateAGOL();
-    })    
+        options.formData.tokenReceived = body.access_token.toString();
+        options.formData.token = body.access_token.toString();
+        console.log("options variable: ", options.formData.token)
+        if (error) {
+            console.log("Error generating token: ", error)
+        } else {
+            console.log("Got token okay. Moving on. ")
+        }
+        geocode(addresses)              
+    })  
+}
+
+function geocode(data) {
+    data = JSON.stringify(addresses);
+    var req = "http://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/geocodeAddresses" 
+        + "?addresses=" 
+        + data
+        + "&sourceCountry=USA"
+        + "&token="
+        + options.formData.tokenReceived
+        + "&f=pjson";
+    console.log("Request in geocoding function: ", req)
+    request(req, function (error, response, body) {
+        if (error) {
+            console.log("Error: ", error);
+        } else {
+            console.log("Geocoding complete. Parsing results and updating geometry.");
+            geocodeBody = JSON.parse(body);
+            for (var i=0; i < geocodeBody.locations.length; i++){
+                masterDataContainer[i].geometry.x = geocodeBody.locations[i].location.x;
+                masterDataContainer[i].geometry.y = geocodeBody.locations[i].location.y;
+                masterDataContainer[i].attributes.Lon_x = geocodeBody.locations[i].location.x;
+                masterDataContainer[i].attributes.Lat_y = geocodeBody.locations[i].location.y;
+            }
+            options.formData.adds = JSON.stringify(masterDataContainer);
+            console.log("full masterDataContainat: ", masterDataContainer)
+            console.log("current token: ", options.formData.token);
+            console.log("current options object: ", options);
+            console.log("options.formData.adds param: ", options.formData.adds)
+            updateAGOL();
+        }
+    })
 }
 
 function updateAGOL() {
