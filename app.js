@@ -7,9 +7,8 @@ var client_id;
 var client_secret;
 var tokenReceived = '';
 var featureServiceURL;
-var geocodeBody = {};
-//Holding container for the data pulled from Access
-var masterDataContainer = {};
+var geocodeBody = {}; //This is where the geocoded result will be stored until it is ready to go to the masterDataContainer.
+var masterDataContainer = {}; //Holding container for the data pulled from Access
 
 //addresses object to be used to pass into the world geocoding service.
 var addresses = {
@@ -40,7 +39,6 @@ featureServiceURL = 'https://services.arcgis.com/PMTtzuTB6WiPuNSv/arcgis/rest/se
 
 var connection = ADODB.open('Provider=Microsoft.Jet.OLEDB.4.0;Data Source=' + sourceDataFile)
 
-
 //Container for the parameters that will be passed into the EventsMap update.
 //options is the json object that will be sent to AGOL.
 var options = { 
@@ -61,8 +59,7 @@ var options = {
 connection.query(queryAllEvents)
     .then(data => {
         console.log("Query database..");
-        console.log("Formatting data..");
-        console.log("Uploading to ArcGIS Online..");
+
         //copy results from query into masterDataContainer bin outside this Promise scope.
         masterDataContainer = data;
         //method that transforms the masterDataContainer object into what ArcGIS needs.
@@ -73,20 +70,14 @@ connection.query(queryAllEvents)
     .then(function() {
         authenticate(client_id, client_secret);
     })
-    .then(function() {
-        console.log(".then following authentication. has geocode(addresses) already run?");
-    })
-    // .then(function() {
-        
-    // })
     .catch(error => console.log("error: ", error));
 
 //Method used to transform data object to feature layer.
 function format(obj) {
-
+    console.log("Formatting data..");
+    
     //These will all need to be updated to match the data schema (fields) being pulled from the AccessDB table.
     for (i in obj) {
-
         //Populate the spatial data. A third function may be required to geocode addresses if there is no point data already available.
         masterDataContainer[i].geometry = {
             "x": obj[i].Lon_x,
@@ -96,12 +87,12 @@ function format(obj) {
             "OBJECTID": obj[i].ID,
             "Description": obj[i].Description,
             "StartDate": obj[i].StartDate,
-            "EndDate": obj[i].EndDate,
-            
+            "EndDate": obj[i].EndDate,            
             //Note: Lat/Long notation is backwards from (x,y) cartesian coordinates. That's why you see Latitude = the Y coordinate and Longitude = the X coordinate.
             "Lat_y": obj[i].Lat_y,
             "Lon_x": obj[i].Lon_x,
             "SingleLine": obj[i].Address
+            //NOTE: If you add fields here, you need to also add fields in the AGO Feature Service, and configure pop-up to make the field visible. Whatta pain!
         }
 
         //pull address data from masterDataContainer and format so it agrees with single line format for arcgis geocoder.
@@ -131,8 +122,7 @@ function authenticate(clientId, clientSecret) {
         'client_secret': clientSecret,
         'grant_type': 'client_credentials',
         'expiration': '2880'
-    }
-    
+    }    
     request.post({
         url: 'https://www.arcgis.com/sharing/rest/oauth2/token/', //This is where you ask for a token on AGOL, not the feature service url.
         json: true,
@@ -140,11 +130,10 @@ function authenticate(clientId, clientSecret) {
     }, function(error, response, body) {
         options.formData.tokenReceived = body.access_token.toString();
         options.formData.token = body.access_token.toString();
-        console.log("options variable: ", options.formData.token)
         if (error) {
             console.log("Error generating token: ", error)
         } else {
-            console.log("Got token okay. Moving on. ")
+            console.log("Authentication complete. Got token. Moving on. ")
         }
         geocode(addresses)              
     })  
@@ -159,7 +148,6 @@ function geocode(data) {
         + "&token="
         + options.formData.tokenReceived
         + "&f=pjson";
-    console.log("Request in geocoding function: ", req)
     request(req, function (error, response, body) {
         if (error) {
             console.log("Error: ", error);
@@ -173,16 +161,13 @@ function geocode(data) {
                 masterDataContainer[i].attributes.Lat_y = geocodeBody.locations[i].location.y;
             }
             options.formData.adds = JSON.stringify(masterDataContainer);
-            console.log("full masterDataContainat: ", masterDataContainer)
-            console.log("current token: ", options.formData.token);
-            console.log("current options object: ", options);
-            console.log("options.formData.adds param: ", options.formData.adds)
             updateAGOL();
         }
     })
 }
 
 function updateAGOL() {
+    console.log("Uploading to ArcGIS Online..");
     request(options, function (error, response, body) { 
         if (error) throw new Error(error);
         console.log("Completed successfully: ", body);
